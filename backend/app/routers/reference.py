@@ -21,6 +21,6 @@ def get_item_types():
     return ITEM_TYPES
 
 
-@router.get("/tariff-item-types")
-def get_tariff_item_types(hospital_id: str, procedure: str):
-    return graph_repo.list_item_types_for_procedure(hospital_id, procedure)
+@router.get("/tariff-catalog")
+def get_tariff_catalog(hospital_id: str):
+    return graph_repo.list_tariff_catalog(hospital_id)

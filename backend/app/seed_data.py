@@ -1,4 +1,5 @@
 from app.db import get_session
+from app import graph_repo
 
 HOSPITALS = [
     {"hospitalId": "H001", "name": "ABC Hospital", "city": "Mumbai"},
@@ -7,7 +8,8 @@ HOSPITALS = [
 
 PROCEDURES = ["Cataract Surgery", "Cardiac Bypass Surgery"]
 
-# (hospitalId, procedure, itemType, allowedAmount)
+# (hospitalId, procedure, category/itemType, rate) - flattened into descriptive
+# tariff catalog line items below, the way a real hospital tariff master reads.
 TARIFFS = [
     # ABC Hospital - Cataract Surgery
     ("H001", "Cataract Surgery", "OT Charges", 25000),
@@ -41,6 +43,30 @@ TARIFFS = [
     ("H002", "Cardiac Bypass Surgery", "Investigation", 18000),
 ]
 
+# (policyNumber, planName, sumInsuredAmount, roomRentLimitPerDay, copayPercentage)
+POLICIES = [
+    ("POL-STANDARD-001", "Health Standard Plan", 500000, 5000, 10),
+    ("POL-PREMIUM-001", "Health Premium Plan", 2000000, 15000, 0),
+]
+
+
+def _tariff_catalog_items() -> list[tuple[str, list[dict]]]:
+    """Group the flat TARIFFS list into per-hospital tariff catalog line items."""
+    by_hospital: dict[str, list[dict]] = {}
+    for hospital_id, procedure, category, rate in TARIFFS:
+        description = f"{category} - {procedure}"
+        tariff_item_id = f"{hospital_id}-{procedure}-{category}".replace(" ", "_")
+        by_hospital.setdefault(hospital_id, []).append(
+            {
+                "tariffItemId": tariff_item_id,
+                "description": description,
+                "category": category,
+                "procedure": procedure,
+                "rate": rate,
+            }
+        )
+    return list(by_hospital.items())
+
 
 def seed() -> None:
     with get_session() as session:
@@ -53,20 +79,8 @@ def seed() -> None:
         for procedure in PROCEDURES:
             session.run("MERGE (proc:Procedure {name: $name})", name=procedure)
 
-        for hospital_id, procedure, item_type, allowed_amount in TARIFFS:
-            tariff_id = f"{hospital_id}-{procedure}-{item_type}".replace(" ", "_")
-            session.run(
-                """
-                MATCH (h:Hospital {hospitalId: $hospitalId})
-                MATCH (proc:Procedure {name: $procedure})
-                MERGE (t:Tariff {tariffId: $tariffId})
-                SET t.itemType = $itemType, t.allowedAmount = $allowedAmount
-                MERGE (h)-[:HAS_TARIFF]->(t)
-                MERGE (t)-[:APPLIES_TO]->(proc)
-                """,
-                hospitalId=hospital_id,
-                procedure=procedure,
-                tariffId=tariff_id,
-                itemType=item_type,
-                allowedAmount=allowed_amount,
-            )
+    for hospital_id, items in _tariff_catalog_items():
+        graph_repo.create_tariff_items(hospital_id, items)
+
+    for policy_number, plan_name, sum_insured, room_rent_limit, copay_pct in POLICIES:
+        graph_repo.seed_policy(policy_number, plan_name, sum_insured, room_rent_limit, copay_pct)

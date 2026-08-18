@@ -10,8 +10,9 @@ from collections import defaultdict
 from app import graph_repo
 
 
-def run(claim_id: str, bill_items: list[dict]) -> list[dict]:
+def run(claim_id: str, bill_items: list[dict]) -> tuple[list[dict], set[str]]:
     findings = []
+    duplicate_bill_item_ids: set[str] = set()
     groups: dict[tuple[str, float], list[dict]] = defaultdict(list)
 
     for item in bill_items:
@@ -46,10 +47,11 @@ def run(claim_id: str, bill_items: list[dict]) -> list[dict]:
         graph_repo.save_finding(
             claim_id=claim_id,
             bill_item_ids=[item["billItemId"] for item in items],
-            tariff_id=None,
+            tariff_item_id=None,
             finding=finding,
         )
 
         findings.append(finding)
+        duplicate_bill_item_ids.update(item["billItemId"] for item in items)
 
-    return findings
+    return findings, duplicate_bill_item_ids

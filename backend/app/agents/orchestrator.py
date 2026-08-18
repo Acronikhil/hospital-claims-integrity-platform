@@ -1,19 +1,38 @@
 """Claim Orchestrator Agent.
 
 Coordinates the specialist agents for a single claim: creates the claim's
-subgraph in Neo4j, runs the Document, Tariff and Duplicate agents against
-it, feeds their findings into the Risk Engine, and produces the final
-explainability report. Every step's outcome is recorded as a pipeline
-trace so a reviewer can see exactly what each agent did, similar to a
-CI pipeline's per-step checks.
+subgraph in Neo4j, runs the Document, Tariff Matching, Duplicate and
+Policy Compliance agents against it, feeds their findings into the Risk
+Engine and Settlement Engine, and produces the final explainability
+report. Every step's outcome is recorded as a pipeline trace so a
+reviewer can see exactly what each agent did, similar to a CI pipeline's
+per-step checks.
 """
 import re
 import time
 import uuid
 
 from app import graph_repo
-from app.agents import document_agent, duplicate_agent, explainability_agent, risk_engine, tariff_agent
-from app.schemas import BillItemIn, CaseSummary, ClaimIn, ClaimReport, PipelineStep
+from app.agents import (
+    document_agent,
+    duplicate_agent,
+    explainability_agent,
+    policy_agent,
+    risk_engine,
+    settlement_engine,
+    tariff_agent,
+)
+from app.constants import DUPLICATE_QUANTITY
+from app.schemas import (
+    BillItemClassification,
+    BillItemIn,
+    CaseSummary,
+    ClaimIn,
+    ClaimReport,
+    PipelineStep,
+    PolicySummary,
+    SettlementSummary,
+)
 
 
 def _slugify_hospital_id(name: str) -> str:
@@ -111,43 +130,46 @@ def process_claim(
     )
 
     start = time.perf_counter()
-    tariff_findings, tariff_reference_available = tariff_agent.run(
+    tariff_findings, classifications, tariff_reference_available = tariff_agent.run(
         claim_id, claim.hospitalId, claim.procedure, bill_items
     )
     tariff_duration = int((time.perf_counter() - start) * 1000)
     if not tariff_reference_available:
         pipeline.append(
             PipelineStep(
-                step="Tariff Check",
-                agent="Tariff Intelligence Agent",
+                step="Tariff Matching",
+                agent="Tariff Matching Agent",
                 status="skipped",
-                summary="No contracted tariff reference data exists for this hospital/procedure - tariff check skipped.",
+                summary="No tariff catalog exists for this hospital - tariff matching skipped.",
                 durationMs=tariff_duration,
             )
         )
     elif tariff_findings:
         pipeline.append(
             PipelineStep(
-                step="Tariff Check",
-                agent="Tariff Intelligence Agent",
+                step="Tariff Matching",
+                agent="Tariff Matching Agent",
                 status="warning",
-                summary=f"Flagged {len(tariff_findings)} line item(s) exceeding the contracted tariff.",
+                summary=(
+                    f"Matched {len(bill_items)} bill item(s) against the tariff catalog; "
+                    f"{len(tariff_findings)} flagged (over-rate, not covered, or ambiguous match)."
+                ),
                 durationMs=tariff_duration,
             )
         )
     else:
         pipeline.append(
             PipelineStep(
-                step="Tariff Check",
-                agent="Tariff Intelligence Agent",
+                step="Tariff Matching",
+                agent="Tariff Matching Agent",
                 status="success",
-                summary="All billed line items are within the hospital's contracted tariff.",
+                summary=f"All {len(bill_items)} bill item(s) matched cleanly within their contracted tariff rate.",
                 durationMs=tariff_duration,
             )
         )
 
     start = time.perf_counter()
-    duplicate_findings = duplicate_agent.run(claim_id, bill_items)
+    duplicate_findings, duplicate_bill_item_ids = duplicate_agent.run(claim_id, bill_items)
     duplicate_duration = int((time.perf_counter() - start) * 1000)
     if duplicate_findings:
         pipeline.append(
@@ -170,7 +192,51 @@ def process_claim(
             )
         )
 
-    findings = tariff_findings + duplicate_findings
+    # Overlay duplicate flags onto the classification breakdown so the reviewer dashboard
+    # surfaces duplicates alongside tariff-match issues in one place.
+    for classification in classifications:
+        if classification["billItemId"] in duplicate_bill_item_ids:
+            classification["status"] = DUPLICATE_QUANTITY
+            graph_repo.save_bill_item_classification(classification["billItemId"], classification)
+
+    start = time.perf_counter()
+    policy_findings, policy_summary = policy_agent.run(
+        claim_id, claim.policyNumber, sum(b["amount"] * b.get("quantity", 1) for b in bill_items),
+        bill_items, claim.lengthOfStayDays,
+    )
+    policy_duration = int((time.perf_counter() - start) * 1000)
+    if not policy_summary["policyAvailable"]:
+        pipeline.append(
+            PipelineStep(
+                step="Policy Compliance Check",
+                agent="Policy Compliance Agent",
+                status="skipped",
+                summary=f"No policy reference data found for '{claim.policyNumber}' - policy checks skipped.",
+                durationMs=policy_duration,
+            )
+        )
+    elif policy_findings:
+        pipeline.append(
+            PipelineStep(
+                step="Policy Compliance Check",
+                agent="Policy Compliance Agent",
+                status="warning",
+                summary=f"Flagged {len(policy_findings)} policy compliance issue(s) against '{policy_summary['planName']}'.",
+                durationMs=policy_duration,
+            )
+        )
+    else:
+        pipeline.append(
+            PipelineStep(
+                step="Policy Compliance Check",
+                agent="Policy Compliance Agent",
+                status="success",
+                summary=f"Claim is within the sum insured and room rent sub-limit of '{policy_summary['planName']}'.",
+                durationMs=policy_duration,
+            )
+        )
+
+    findings = tariff_findings + duplicate_findings + policy_findings
 
     start = time.perf_counter()
     risk_level, potential_leakage = risk_engine.assess(findings)
@@ -182,6 +248,27 @@ def process_claim(
             summary=(
                 f"Aggregated {len(findings)} finding(s) → {risk_level} risk, "
                 f"₹{potential_leakage:,.0f} potential leakage."
+            ),
+            durationMs=int((time.perf_counter() - start) * 1000),
+        )
+    )
+
+    start = time.perf_counter()
+    settlement_dict = settlement_engine.calculate(
+        claimed_amount=sum(b["amount"] * b.get("quantity", 1) for b in bill_items),
+        classifications=classifications,
+        duplicate_findings=duplicate_findings,
+        policy_summary=policy_summary,
+    )
+    settlement = SettlementSummary(**settlement_dict)
+    pipeline.append(
+        PipelineStep(
+            step="Settlement Calculation",
+            agent="Settlement Engine",
+            status="info",
+            summary=(
+                f"Recommended settlement: ₹{settlement.recommendedSettlementAmount:,.0f} of "
+                f"₹{settlement.claimedAmount:,.0f} claimed (₹{settlement.withheldAmount:,.0f} withheld)."
             ),
             durationMs=int((time.perf_counter() - start) * 1000),
         )
@@ -200,6 +287,8 @@ def process_claim(
         potential_leakage=potential_leakage,
         findings=findings,
         tariff_reference_available=tariff_reference_available,
+        settlement=settlement_dict,
+        policy_summary=policy_summary,
     )
     summary = CaseSummary(**summary_dict)
     pipeline.append(
@@ -216,9 +305,11 @@ def process_claim(
         "MEDIUM RISK - PENDING REVIEW" if risk_level == "MEDIUM" else "PENDING REVIEW"
     )
 
+    policy = PolicySummary(**policy_summary)
     pipeline_json = "[" + ",".join(step.model_dump_json() for step in pipeline) + "]"
     graph_repo.update_claim_result(
-        claim_id, risk_level, potential_leakage, summary.model_dump_json(), pipeline_json, status
+        claim_id, risk_level, potential_leakage, summary.model_dump_json(), pipeline_json, status,
+        policy.model_dump_json(), settlement.model_dump_json(), settlement.recommendedSettlementAmount,
     )
 
     return ClaimReport(
@@ -226,6 +317,9 @@ def process_claim(
         riskLevel=risk_level,
         potentialLeakage=potential_leakage,
         findings=findings,
+        classifications=[BillItemClassification(**c) for c in classifications],
+        policy=policy,
+        settlement=settlement,
         summary=summary,
         pipeline=pipeline,
         status=status,

@@ -90,17 +90,117 @@ def create_claim_graph(
         return created_items
 
 
-def get_tariff(hospital_id: str, procedure: str, item_type: str):
+def create_tariff_items(hospital_id: str, items: list[dict]) -> None:
+    """items: list of {tariffItemId, description, category, procedure, rate}."""
+    with get_session() as session:
+        for item in items:
+            session.run(
+                """
+                MATCH (h:Hospital {hospitalId: $hospitalId})
+                MERGE (t:TariffItem {tariffItemId: $tariffItemId})
+                SET t.description = $description,
+                    t.category = $category,
+                    t.procedure = $procedure,
+                    t.rate = $rate
+                MERGE (h)-[:HAS_TARIFF_ITEM]->(t)
+                """,
+                hospitalId=hospital_id,
+                tariffItemId=item["tariffItemId"],
+                description=item["description"],
+                category=item["category"],
+                procedure=item["procedure"],
+                rate=item["rate"],
+            )
+
+
+def list_tariff_catalog(hospital_id: str) -> list[dict]:
     with get_session() as session:
         result = session.run(
             """
-            MATCH (h:Hospital {hospitalId: $hospitalId})-[:HAS_TARIFF]->(t:Tariff)-[:APPLIES_TO]->(proc:Procedure {name: $procedure})
-            WHERE t.itemType = $itemType
-            RETURN t.tariffId AS tariffId, t.allowedAmount AS allowedAmount
+            MATCH (h:Hospital {hospitalId: $hospitalId})-[:HAS_TARIFF_ITEM]->(t:TariffItem)
+            RETURN t.tariffItemId AS tariffItemId, t.description AS description,
+                   t.category AS category, t.procedure AS procedure, t.rate AS rate
             """,
             hospitalId=hospital_id,
-            procedure=procedure,
-            itemType=item_type,
+        )
+        return [dict(record) for record in result]
+
+
+def has_tariff_catalog(hospital_id: str) -> bool:
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (h:Hospital {hospitalId: $hospitalId})-[:HAS_TARIFF_ITEM]->(t:TariffItem)
+            RETURN count(t) > 0 AS hasCatalog
+            """,
+            hospitalId=hospital_id,
+        )
+        record = result.single()
+        return bool(record["hasCatalog"]) if record else False
+
+
+def save_bill_item_classification(bill_item_id: str, classification: dict) -> None:
+    """classification keys: status, confidence, matchedTariffItemId, matchedTariffDescription, matchedRate, variance."""
+    with get_session() as session:
+        session.run(
+            """
+            MATCH (b:BillItem {billItemId: $billItemId})
+            SET b.matchStatus = $status,
+                b.matchConfidence = $confidence,
+                b.matchedTariffDescription = $matchedTariffDescription,
+                b.matchedRate = $matchedRate,
+                b.matchVariance = $variance
+            """,
+            billItemId=bill_item_id,
+            status=classification["status"],
+            confidence=classification["confidence"],
+            matchedTariffDescription=classification.get("matchedTariffDescription"),
+            matchedRate=classification.get("matchedRate"),
+            variance=classification.get("variance"),
+        )
+        tariff_item_id = classification.get("matchedTariffItemId")
+        if tariff_item_id:
+            session.run(
+                """
+                MATCH (b:BillItem {billItemId: $billItemId})
+                MATCH (t:TariffItem {tariffItemId: $tariffItemId})
+                MERGE (b)-[:MATCHED_TO]->(t)
+                """,
+                billItemId=bill_item_id,
+                tariffItemId=tariff_item_id,
+            )
+
+
+def seed_policy(policy_number: str, plan_name: str, sum_insured: float, room_rent_limit: float, copay_pct: float) -> None:
+    with get_session() as session:
+        session.run(
+            """
+            MERGE (pol:Policy {policyNumber: $policyNumber})
+            SET pol.planName = $planName,
+                pol.sumInsuredAmount = $sumInsured,
+                pol.roomRentLimitPerDay = $roomRentLimit,
+                pol.copayPercentage = $copayPct
+            """,
+            policyNumber=policy_number,
+            planName=plan_name,
+            sumInsured=sum_insured,
+            roomRentLimit=room_rent_limit,
+            copayPct=copay_pct,
+        )
+
+
+def get_policy(policy_number: str) -> dict | None:
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (pol:Policy {policyNumber: $policyNumber})
+            WHERE pol.sumInsuredAmount IS NOT NULL
+            RETURN pol.policyNumber AS policyNumber, pol.planName AS planName,
+                   pol.sumInsuredAmount AS sumInsuredAmount,
+                   pol.roomRentLimitPerDay AS roomRentLimitPerDay,
+                   pol.copayPercentage AS copayPercentage
+            """,
+            policyNumber=policy_number,
         )
         record = result.single()
         return dict(record) if record else None
@@ -109,7 +209,7 @@ def get_tariff(hospital_id: str, procedure: str, item_type: str):
 def save_finding(
     claim_id: str,
     bill_item_ids: list[str] | None,
-    tariff_id: str | None,
+    tariff_item_id: str | None,
     finding: dict,
 ) -> None:
     with get_session() as session:
@@ -144,15 +244,15 @@ def save_finding(
                 findingId=finding["findingId"],
                 billItemId=bill_item_id,
             )
-        if tariff_id:
+        if tariff_item_id:
             session.run(
                 """
                 MATCH (f:Finding {findingId: $findingId})
-                MATCH (t:Tariff {tariffId: $tariffId})
+                MATCH (t:TariffItem {tariffItemId: $tariffItemId})
                 MERGE (f)-[:BASED_ON]->(t)
                 """,
                 findingId=finding["findingId"],
-                tariffId=tariff_id,
+                tariffItemId=tariff_item_id,
             )
 
 
@@ -163,6 +263,9 @@ def update_claim_result(
     summary_json: str,
     pipeline_json: str,
     status: str,
+    policy_json: str | None,
+    settlement_json: str | None,
+    recommended_settlement_amount: float | None,
 ) -> None:
     with get_session() as session:
         session.run(
@@ -172,6 +275,9 @@ def update_claim_result(
                 c.potentialLeakage = $potentialLeakage,
                 c.summary = $summaryJson,
                 c.pipeline = $pipelineJson,
+                c.policy = $policyJson,
+                c.settlement = $settlementJson,
+                c.recommendedSettlementAmount = $recommendedSettlementAmount,
                 c.status = $status
             """,
             claimId=claim_id,
@@ -179,6 +285,9 @@ def update_claim_result(
             potentialLeakage=potential_leakage,
             summaryJson=summary_json,
             pipelineJson=pipeline_json,
+            policyJson=policy_json,
+            settlementJson=settlement_json,
+            recommendedSettlementAmount=recommended_settlement_amount,
             status=status,
         )
 
@@ -206,20 +315,6 @@ def create_hospital(hospital_id: str, name: str) -> None:
             hospitalId=hospital_id,
             name=name,
         )
-
-
-def has_tariff_reference(hospital_id: str, procedure: str) -> bool:
-    with get_session() as session:
-        result = session.run(
-            """
-            MATCH (h:Hospital {hospitalId: $hospitalId})-[:HAS_TARIFF]->(t:Tariff)-[:APPLIES_TO]->(proc:Procedure {name: $procedure})
-            RETURN count(t) > 0 AS hasTariff
-            """,
-            hospitalId=hospital_id,
-            procedure=procedure,
-        )
-        record = result.single()
-        return bool(record["hasTariff"]) if record else False
 
 
 def update_claim_decision(claim_id: str, decision: str, note: str | None) -> None:
@@ -251,6 +346,7 @@ def list_claims() -> list[dict]:
                    c.claimedAmount AS claimedAmount,
                    c.riskLevel AS riskLevel,
                    c.potentialLeakage AS potentialLeakage,
+                   c.recommendedSettlementAmount AS recommendedSettlementAmount,
                    c.status AS status,
                    toString(c.createdAt) AS createdAt
             ORDER BY c.createdAt DESC
@@ -299,6 +395,29 @@ def get_claim_detail(claim_id: str) -> dict | None:
                 claim_dict["pipeline"] = json.loads(claim_dict["pipeline"])
             except (TypeError, json.JSONDecodeError):
                 pass
+        for json_field in ("policy", "settlement"):
+            if claim_dict and claim_dict.get(json_field):
+                try:
+                    claim_dict[json_field] = json.loads(claim_dict[json_field])
+                except (TypeError, json.JSONDecodeError):
+                    pass
+
+        bill_items = [dict(b) for b in record["billItems"] if b is not None]
+        classifications = [
+            {
+                "billItemId": b["billItemId"],
+                "description": b["description"],
+                "itemType": b["itemType"],
+                "billedAmount": b["amount"] * b.get("quantity", 1),
+                "status": b["matchStatus"],
+                "confidence": b.get("matchConfidence"),
+                "matchedTariffDescription": b.get("matchedTariffDescription"),
+                "matchedRate": b.get("matchedRate"),
+                "variance": b.get("matchVariance"),
+            }
+            for b in bill_items
+            if b.get("matchStatus")
+        ]
 
         return {
             "claim": claim_dict,
@@ -307,7 +426,8 @@ def get_claim_detail(claim_id: str) -> dict | None:
             "doctor": node_to_dict(record["doctor"]),
             "diagnosis": node_to_dict(record["diagnosis"]),
             "procedure": node_to_dict(record["procedure"]),
-            "billItems": [dict(b) for b in record["billItems"] if b is not None],
+            "billItems": bill_items,
+            "classifications": classifications,
             "findings": [dict(f) for f in record["findings"] if f is not None],
         }
 
@@ -324,14 +444,3 @@ def list_procedures() -> list[dict]:
         return [dict(record) for record in result]
 
 
-def list_item_types_for_procedure(hospital_id: str, procedure: str) -> list[str]:
-    with get_session() as session:
-        result = session.run(
-            """
-            MATCH (h:Hospital {hospitalId: $hospitalId})-[:HAS_TARIFF]->(t:Tariff)-[:APPLIES_TO]->(proc:Procedure {name: $procedure})
-            RETURN DISTINCT t.itemType AS itemType ORDER BY t.itemType
-            """,
-            hospitalId=hospital_id,
-            procedure=procedure,
-        )
-        return [record["itemType"] for record in result]

@@ -59,11 +59,44 @@ class PipelineStep(BaseModel):
     durationMs: Optional[int] = None
 
 
+class BillItemClassification(BaseModel):
+    billItemId: str
+    description: str
+    itemType: str
+    billedAmount: float
+    status: str  # MATCHED_WITHIN_RATE | MATCHED_OVER_RATE | MATCHED_UNDER_RATE | NOT_COVERED | UNMAPPED_AMBIGUOUS | DUPLICATE_QUANTITY
+    confidence: int  # 0-100, fuzzy-match confidence against the tariff catalog
+    matchedTariffDescription: Optional[str] = None
+    matchedRate: Optional[float] = None
+    variance: Optional[float] = None
+
+
+class PolicySummary(BaseModel):
+    policyAvailable: bool
+    policyNumber: str
+    planName: Optional[str] = None
+    sumInsuredAmount: Optional[float] = None
+    roomRentLimitPerDay: Optional[float] = None
+    copayPercentage: Optional[float] = None
+
+
+class SettlementSummary(BaseModel):
+    claimedAmount: float
+    recommendedSettlementAmount: float
+    withheldAmount: float
+    sumInsuredCapApplied: bool = False
+    copayAmount: float = 0
+    insurerPayableAmount: float
+
+
 class ClaimReport(BaseModel):
     claimId: str
     riskLevel: str
     potentialLeakage: float
     findings: list[Finding]
+    classifications: list[BillItemClassification] = Field(default_factory=list)
+    policy: Optional[PolicySummary] = None
+    settlement: Optional[SettlementSummary] = None
     summary: CaseSummary
     pipeline: list[PipelineStep] = Field(default_factory=list)
     status: str
@@ -100,6 +133,7 @@ class ClaimSummary(BaseModel):
     claimedAmount: Optional[float] = None
     riskLevel: Optional[str] = None
     potentialLeakage: Optional[float] = None
+    recommendedSettlementAmount: Optional[float] = None
     status: Optional[str] = None
     createdAt: Optional[str] = None
 
@@ -112,6 +146,7 @@ class ClaimDetail(BaseModel):
     diagnosis: Optional[dict] = None
     procedure: Optional[dict] = None
     billItems: list[dict] = Field(default_factory=list)
+    classifications: list[dict] = Field(default_factory=list)
     findings: list[dict] = Field(default_factory=list)
 
 

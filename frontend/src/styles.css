@@ -895,3 +895,126 @@ textarea:focus {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Tariff matching breakdown */
+
+.table-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.table-scroll .bill-table {
+  border: none;
+  border-radius: 0;
+}
+
+.classification-table {
+  min-width: 720px;
+}
+
+.class-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.class-within {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.class-over {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.class-under {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.class-not-covered {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.class-ambiguous {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+
+.class-duplicate {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+/* Settlement & Policy panel */
+
+.settlement-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settlement-figures {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.settlement-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.settlement-figure .label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.settlement-figure .value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.settlement-figure-highlight {
+  background: #eef2ff;
+}
+
+.settlement-figure-highlight .value {
+  color: var(--primary);
+}
+
+.policy-details {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.policy-detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.policy-detail-row .label {
+  color: var(--muted);
+  font-weight: 600;
+}

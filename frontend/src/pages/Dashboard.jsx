@@ -66,6 +66,7 @@ export default function Dashboard() {
               <th>Hospital</th>
               <th>Procedure</th>
               <th>Claimed Amount</th>
+              <th>Recommended Settlement</th>
               <th>Risk</th>
               <th>Potential Leakage</th>
               <th>Status</th>
@@ -83,6 +84,7 @@ export default function Dashboard() {
                 <td>{claim.hospitalName || "—"}</td>
                 <td>{claim.procedure || "—"}</td>
                 <td>{formatCurrency(claim.claimedAmount)}</td>
+                <td>{formatCurrency(claim.recommendedSettlementAmount)}</td>
                 <td>
                   <RiskBadge level={claim.riskLevel} />
                 </td>

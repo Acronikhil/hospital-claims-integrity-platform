@@ -41,7 +41,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT diagnosis_name IF NOT EXISTS FOR (d:Diagnosis) REQUIRE d.name IS UNIQUE",
     "CREATE CONSTRAINT claim_id IF NOT EXISTS FOR (c:Claim) REQUIRE c.claimId IS UNIQUE",
     "CREATE CONSTRAINT bill_item_id IF NOT EXISTS FOR (b:BillItem) REQUIRE b.billItemId IS UNIQUE",
-    "CREATE CONSTRAINT tariff_id IF NOT EXISTS FOR (t:Tariff) REQUIRE t.tariffId IS UNIQUE",
+    "CREATE CONSTRAINT tariff_item_id IF NOT EXISTS FOR (t:TariffItem) REQUIRE t.tariffItemId IS UNIQUE",
     "CREATE CONSTRAINT finding_id IF NOT EXISTS FOR (f:Finding) REQUIRE f.findingId IS UNIQUE",
 ]
 

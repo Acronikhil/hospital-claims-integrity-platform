@@ -5,6 +5,8 @@ import RiskBadge from "../components/RiskBadge.jsx";
 import FindingCard from "../components/FindingCard.jsx";
 import CaseSummary from "../components/CaseSummary.jsx";
 import PipelineView from "../components/PipelineView.jsx";
+import SettlementPanel from "../components/SettlementPanel.jsx";
+import BillClassificationTable from "../components/BillClassificationTable.jsx";
 
 const formatCurrency = (value) =>
   typeof value === "number" ? `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` : "—";
@@ -45,7 +47,7 @@ export default function ClaimDetail() {
   if (error) return <div className="page error-text">{error}</div>;
   if (!detail) return null;
 
-  const { claim, patient, hospital, doctor, diagnosis, procedure, billItems, findings } = detail;
+  const { claim, patient, hospital, doctor, diagnosis, procedure, billItems, classifications, findings } = detail;
   const sortedFindings = [...findings].sort((a, b) => (b.variance || 0) - (a.variance || 0));
 
   return (
@@ -99,6 +101,11 @@ export default function ClaimDetail() {
       </div>
 
       <section className="section">
+        <h2>Settlement &amp; Policy</h2>
+        <SettlementPanel settlement={claim.settlement} policy={claim.policy} />
+      </section>
+
+      <section className="section">
         <h2>Investigation Pipeline</h2>
         <p className="muted pipeline-intro">
           What each agent did to reach this result — like a CI run, expand a step to see its raw output.
@@ -114,6 +121,14 @@ export default function ClaimDetail() {
           claimedAmount={claim.claimedAmount}
           potentialLeakage={claim.potentialLeakage}
         />
+      </section>
+
+      <section className="section">
+        <h2>Tariff Matching Breakdown</h2>
+        <p className="muted pipeline-intro">
+          Every bill item mapped to the hospital's tariff catalog, with match confidence and outcome.
+        </p>
+        <BillClassificationTable classifications={classifications} />
       </section>
 
       <section className="section">
