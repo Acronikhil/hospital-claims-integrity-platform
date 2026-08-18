@@ -44,6 +44,26 @@ for this pass and can be layered on the same graph model later.
 
 No API keys or external services are required — everything runs locally.
 
+## What's static vs. dynamic in the graph
+
+The Neo4j graph holds two kinds of data with very different lifecycles:
+
+- **Static reference data — Hospital, TariffItem, Procedure, Policy nodes.** These come entirely
+  from the hardcoded Python literals in `seed_data.py` and are re-applied via idempotent `MERGE`
+  every time the backend starts (`main.py` startup hook) — the values never change at runtime and
+  there's no admin endpoint or ETL job to update them; `reference.py` only exposes read-only GETs.
+  Search against this data (the tariff-matching fuzzy lookup) always runs against the same fixed
+  catalog.
+- **Dynamic transactional data — Claim, Patient, Doctor, Diagnosis, BillItem, Finding nodes.**
+  These are created live, per request, from uploaded PDF bills via the Document Intelligence Agent
+  and written to the graph through `graph_repo.create_claim_graph`. A hospital name that doesn't
+  match a seeded one gets an ad-hoc `Hospital` node created on the fly (see below), but it inherits
+  no tariff catalog, so tariff matching is skipped for it.
+
+In short: claims flow into the graph dynamically, but they're matched against a static, hardcoded
+demo tariff/policy dataset — see "Extending beyond this MVP" for what real tariff ingestion would
+require.
+
 ## Document extraction: how it works, and its limits
 
 `backend/app/agents/document_agent.py` extracts fields with labeled regex patterns (`Patient

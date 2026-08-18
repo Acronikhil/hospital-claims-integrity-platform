@@ -4,3 +4,6 @@ __pycache__/
 node_modules/
 dist/
 .venv/
+
+# Claude Code local state (per-machine, not shared context)
+.claude/settings.local.json
